@@ -3,13 +3,16 @@ import WebKit
 
 struct ContentView: View {
     @ObservedObject private var store = TranscriptStore.shared
-    @Environment(\.scenePhase) private var scenePhase
-
-    @State private var showSaved = false
-    @State private var showClearConfirm = false
+    
+    @State private var showSessions = false
     @State private var isPicking = false
     @State private var composerSelector: String = ""
     @State private var lastInjectResult: String = ""
+    @State private var showPrivacyAlert = false
+    @State private var sessionToDelete: Session?
+    @State private var renameSession: Session?
+    @State private var showAlert = false
+    @State private var alertMessage = ""
 
     @State private var webView: WKWebView = {
         let config = WKWebViewConfiguration()
@@ -50,12 +53,12 @@ struct ContentView: View {
                 let cur = el;
                 while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
                     let part = cur.tagName.toLowerCase();
-                    if (cur.id) {
+                    if (el.id) {
                         parts.unshift('#' + CSS.escape(cur.id));
                         break;
                     }
                     const cls = (typeof cur.className === 'string' && cur.className.trim())
-                        ? cur.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2)
+                        ? cur.className.trim().split(/\s+/).filter(Boolean).slice(0, 2)
                         : [];
                     if (cls.length) {
                         part += '.' + cls.map(function(c){ return CSS.escape(c); }).join('.');
@@ -114,8 +117,8 @@ struct ContentView: View {
     }()
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
+        ZStack {
+            VStack(spacing: 0) {
                 WebViewWrapper(webView: webView,
                                onSave: { store.save($0) },
                                onPicked: { sel, desc in
@@ -124,94 +127,224 @@ struct ContentView: View {
                                    lastInjectResult = "Target: \(desc)"
                                })
 
-                if showSaved {
-                    savedPane
-                        .background(Color(UIColor.systemBackground))
-                }
+                Divider()
+
+                controls
+
+                statusBar
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
-
-            VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    Button(isPicking ? "Cancel Pick" : "1. Pick Target") {
-                        isPicking ? cancelPick() : armPicker()
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-
-                    Button("2. Insert Transcript") { injectTranscript() }
-                        .buttonStyle(.borderedProminent)
-                        .font(.caption)
-                        .disabled(composerSelector.isEmpty || store.latest.isEmpty)
-                }
-
-                HStack(spacing: 8) {
-                    Button("Saved") { showSaved.toggle() }
-                        .buttonStyle(.bordered)
-                        .font(.caption)
-
-                    Button(store.captureEnabled ? "Pause" : "Resume") {
-                        store.captureEnabled.toggle()
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.caption)
-
-                    Button("Clear") { showClearConfirm = true }
-                        .buttonStyle(.bordered)
-                        .font(.caption)
-                        .tint(.red)
-
-                    Button("Cookies") { clearCookies() }
-                        .buttonStyle(.bordered)
-                        .font(.caption)
-                }
+            // Privacy blur overlay
+            if store.privacyMode {
+                Color.black
+                    .ignoresSafeArea()
+                    .transition(.opacity)
             }
-            .padding(.horizontal)
-            .padding(.top, 8)
 
-            statusBar
+            // Sessions menu overlay
+            if showSessions {
+                sessionsSheet
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: store.privacyMode)
         .onAppear {
             webView.load(URLRequest(url: URL(string: "https://lumo.proton.me")!))
         }
-        .onChange(of: scenePhase) { phase in
-            guard phase != .active else { return }
-            webView.evaluateJavaScript("document.body ? document.body.innerText : ''") { value, _ in
-                if let s = value as? String { store.save(s) }
+        .onChange(of: store.captureEnabled) { enabled in
+            if enabled {
+                webView.evaluateJavaScript("document.body ? document.body.innerText : ''") { value, _ in
+                    if let s = value as? String { store.save(s) }
+                }
             }
         }
-        .alert("Delete saved transcript?", isPresented: $showClearConfirm) {
-            Button("Cancel", role: .cancel) {}
+        .alert("Privacy & Settings", isPresented: $showPrivacyAlert) {
+            Button("Privacy Blur") {
+                store.privacyMode.toggle()
+            }
+            Button("Dismiss", role: .cancel) {}
+        } message: {
+            Text("Toggle privacy mode to blackout the screen when you minimize the app.")
+        }
+        .alert("Delete Session?", isPresented: $showAlert) {
+            Button("Cancel", role: .cancel) { sessionToDelete = nil }
             Button("Delete", role: .destructive) {
-                store.clear()
-                lastInjectResult = ""
+                if let session = sessionToDelete {
+                    store.deleteSession(id: session.id)
+                    sessionToDelete = nil
+                }
             }
         } message: {
-            Text("This permanently deletes the transcript from the app's private storage and pauses capture so it doesn't come straight back. It cannot be undone.")
+            if let session = sessionToDelete {
+                Text("This permanently deletes '\(session.title)' and its transcript. This cannot be undone.")
+            }
         }
     }
 
-    // MARK: - Saved pane
+    // MARK: - Controls (Main UI)
 
-    private var savedPane: some View {
-        ScrollView {
-            Text(store.latest.isEmpty ? "(nothing saved yet)" : store.latest)
-                .font(.system(size: 11, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var controls: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Button(isPicking ? "Cancel Pick" : "Pick Target") {
+                    isPicking ? cancelPick() : armPicker()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+
+                Button("Insert Transcript") { injectTranscript() }
+                    .buttonStyle(.borderedProminent)
+                    .font(.caption)
+                    .disabled(composerSelector.isEmpty || store.latest.isEmpty)
+
+                Button("Turn Into Tab") { createSession() }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                    .disabled(store.latest.isEmpty)
+
+                Button("Cookies") { clearCookies() }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+            }
+
+            HStack(spacing: 8) {
+                Button("Settings") {
+                    showSessions = true
+                    showPrivacyAlert = true
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+
+                Button(store.captureEnabled ? "Pause" : "Resume") {
+                    store.captureEnabled.toggle()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+
+                Button("Clear") {
+                    store.captureEnabled = false
+                    store.clear()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+                .tint(.red)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+
+    // MARK: - Sessions Sheet
+
+    private var sessionsSheet: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    showSessions = false
+                }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Saved Chats")
+                        .font(.headline)
+                    Spacer()
+                    Button("Done") { showSessions = false }
+                }
                 .padding()
-                .textSelection(.enabled)
+
+                if store.sessions.isEmpty {
+                    Text("(no saved chats yet)\nTap 'Turn Into Tab' to save current chat")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach(store.sessions) { session in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(session.title)
+                                            .fontWeight(.semibold)
+                                        Text(formattedDate(session.lastActive))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+
+                                    Button("Load") {
+                                        store.loadSession(session)
+                                        selectedSessionId = session.id
+                                        showSessions = false
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .font(.caption)
+
+                                    Button("Edit") {
+                                        renameSession = session
+                                    }
+                                    .font(.caption)
+
+                                    Button("Delete") {
+                                        sessionToDelete = session
+                                        showAlert = true
+                                    }
+                                    .font(.caption)
+                                    .tint(.red)
+                                }
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(session.id == store.selectedSessionId ? Color.blue : Color.clear, lineWidth: 2)
+                                )
+                            }
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .frame(width: UIScreen.main.bounds.width * 0.85, height: UIScreen.main.bounds.height * 0.7)
+            .background(Color.white)
+            .cornerRadius(12)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            store.loadSessions()
+        }
+        .alert("Rename Chat", isPresented: Binding(
+            get: { renameSession != nil },
+            set: { if !$0 { renameSession = nil } }
+        )) {
+            if let session = renameSession {
+                TextField("Title", text: Binding(
+                    get: { session.title },
+                    set: { session.title = $0 }
+                ))
+                Button("Save") {
+                    if let session = renameSession {
+                        store.updateSessionTitle(id: session.id, newTitle: session.title)
+                        renameSession = nil
+                    }
+                }
+            }
+        } message: {
+            if let session = renameSession {
+                Text("Enter a custom title for this chat:")
+                TextField("Title", text: Binding(
+                    get: { session.title },
+                    set: { session.title = $0 }
+                ))
+            }
+        }
     }
 
-    // MARK: - Status bar
+    // MARK: - Status Bar
 
     private var statusBar: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Capture: \(store.captureEnabled ? "ON" : "PAUSED")   Saves: \(store.saveCount)   Last: \(store.lastSaved)   Chars: \(store.latest.count)")
-
+            Text("Capture: \(store.captureEnabled ? "ON" : "PAUSED")   Saves: \(store.saveCount)")
+            
             if !composerSelector.isEmpty {
                 Text("Target: \(composerSelector)")
                     .lineLimit(2)
@@ -235,6 +368,24 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - Helpers
+
+    private func formattedDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func createSession() {
+        store.turnIntoTab {
+            showSessions = true
+            store.captureEnabled = false
+            // Reload WebView for fresh chat session
+            webView.reload()
+        }
     }
 
     // MARK: - Picker

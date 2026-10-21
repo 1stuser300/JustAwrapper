@@ -1,6 +1,17 @@
 import Foundation
 import Combine
 
+struct Session: Codable, Identifiable {
+    let id: String
+    var title: String
+    let createdAt: Date
+    var lastActive: Date
+    
+    static func makeNew(title: String = "") -> Session {
+        Session(id: UUID().uuidString, title: title.isEmpty ? "New Chat" : title, createdAt: Date(), lastActive: Date())
+    }
+}
+
 final class TranscriptStore: ObservableObject {
     static let shared = TranscriptStore()
 
@@ -9,19 +20,29 @@ final class TranscriptStore: ObservableObject {
     @Published var lastError: String = ""
     @Published var saveCount: Int = 0
     @Published var captureEnabled: Bool = true
-
+    @Published var privacyMode: Bool = false
+    
+    @Published var sessions: [Session] = []
+    @Published var selectedSessionId: String?
+    
     private let fm = FileManager.default
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+    private let indexFile = "sessions.json"
 
     private var dir: URL {
         fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("LumoTranscripts", isDirectory: true)
     }
 
-    var transcriptFile: URL { dir.appendingPathComponent("transcript.txt") }
+    private var indexURL: URL { dir.appendingPathComponent(indexFile) }
+    private var transcriptFileFor(id: String) -> URL { dir.appendingPathComponent("\(id).txt") }
+
     var storagePath: String { dir.path }
 
     init() {
         _ = ensureDir()
+        loadSessions()
         loadLatest()
     }
 
@@ -36,6 +57,25 @@ final class TranscriptStore: ObservableObject {
         }
     }
 
+    private func saveIndex() {
+        do {
+            let data = try encoder.encode(sessions)
+            try data.write(to: indexURL)
+        } catch {
+            lastError = "index save failed: \(error.localizedDescription)"
+        }
+    }
+
+    func loadSessions() {
+        if fm.fileExists(atPath: indexURL.path),
+           let data = try? Data(contentsOf: indexURL),
+           let loaded = try? decoder.decode([Session].self, from: data) {
+            sessions = loaded.sorted { $0.lastActive > $1.lastActive }
+        } else {
+            sessions = []
+        }
+    }
+
     func save(_ raw: String) {
         guard captureEnabled else { return }
 
@@ -47,6 +87,9 @@ final class TranscriptStore: ObservableObject {
         _ = ensureDir()
 
         do {
+            try transcriptFile.setResourceValues([
+                URLResourceKey.isExcludedFromBackupKey: true
+            ])
             try text.write(to: transcriptFile, atomically: true, encoding: .utf8)
             saveCount += 1
             lastSaved = ISO8601DateFormatter().string(from: Date())
@@ -56,23 +99,92 @@ final class TranscriptStore: ObservableObject {
         }
     }
 
+    // Main chat uses latest.txt
+    private var transcriptFile: URL {
+        dir.appendingPathComponent("transcript.txt")
+    }
+
     func loadLatest() {
         latest = (try? String(contentsOf: transcriptFile, encoding: .utf8)) ?? ""
     }
 
-    /// Deletes the stored transcript and pauses capture so it doesn't reappear.
-    func clear() {
+    // MARK: - Session Management
+
+    /// Turns current chat into a saved tab AND reloads WebView for fresh chat
+    func turnIntoTab(title: String = "", onComplete: @escaping () -> Void) {
+        let session = Session.makeNew(title: title)
+        
         do {
-            if fm.fileExists(atPath: transcriptFile.path) {
-                try fm.removeItem(at: transcriptFile)
-            }
-            latest = ""
-            lastSaved = "-"
+            // Save current state to session file
+            try latest.write(to: transcriptFileFor(id: session.id), atomically: true, encoding: .utf8)
+            
+            // Set exclusion flag
+            try transcriptFileFor(id: session.id).setResourceValues([
+                URLResourceKey.isExcludedFromBackupKey: true
+            ])
+            
+            sessions.insert(session, at: 0)
+            saveIndex()
+            
+            // Don't clear latest - let WebView reload handle that naturally
             saveCount = 0
-            lastError = ""
+            lastSaved = ISO8601DateFormatter().string(from: Date())
+            
             captureEnabled = false
+            onComplete()
         } catch {
-            lastError = "delete failed: \(error.localizedDescription)"
+            lastError = "session create failed: \(error.localizedDescription)"
         }
+    }
+
+    func loadSession(_ session: Session) {
+        let url = transcriptFileFor(id: session.id)
+        if let content = try? String(contentsOf: url, encoding: .utf8) {
+            latest = content
+            lastSaved = ISO8601DateFormatter().string(from: session.lastActive)
+            selectedSessionId = session.id
+            captureEnabled = false
+        }
+    }
+
+    func updateSessionTitle(id: String, newTitle: String) {
+        if let idx = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[idx].title = newTitle
+            sessions[idx].lastActive = Date()
+            sessions.moveObject(at: idx, to: 0)
+            saveIndex()
+        }
+    }
+
+    func deleteSession(id: String) {
+        let url = transcriptFileFor(id: id)
+        do {
+            if fm.fileExists(atPath: url.path) {
+                try fm.removeItem(at: url)
+            }
+            sessions.removeAll { $0.id == id }
+            saveIndex()
+            if selectedSessionId == id {
+                selectedSessionId = nil
+                latest = ""
+            }
+        } catch {
+            lastError = "session delete failed: \(error.localizedDescription)"
+        }
+    }
+
+    func resumeCapture() {
+        captureEnabled = true
+    }
+}
+
+// MARK: - Helpers
+extension Array {
+    mutating func moveObject(at fromIndex: Int, to toIndex: Int) {
+        guard fromIndex != toIndex,
+              fromIndex >= 0, fromIndex < count,
+              toIndex >= 0, toIndex < count else { return }
+        let obj = self.remove(at: fromIndex)
+        insert(obj, at: toIndex)
     }
 }
