@@ -45,7 +45,7 @@ final class TranscriptStore: ObservableObject {
 
     var storagePath: String { dir.path }
     
-    private var transcriptFile: URL {
+    private func transcriptFilePath() -> URL {
         dir.appendingPathComponent("transcript.txt")
     }
 
@@ -96,12 +96,14 @@ final class TranscriptStore: ObservableObject {
         _ = ensureDir()
 
         do {
-            try text.write(to: transcriptFile, atomically: true, encoding: .utf8)
+            // FIX: Store URL in a variable first
+            let fileURL = transcriptFilePath()
+            try text.write(to: fileURL, atomically: true, encoding: .utf8)
             
-            // Exclude from backups
+            // Now modify the variable, not the computed property
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = true
-            try transcriptFile.setResourceValues(resourceValues)
+            try fileURL.setResourceValues(resourceValues)
             
             saveCount += 1
             lastSaved = ISO8601DateFormatter().string(from: Date())
@@ -112,7 +114,8 @@ final class TranscriptStore: ObservableObject {
     }
 
     func loadLatest() {
-        latest = (try? String(contentsOf: transcriptFile, encoding: .utf8)) ?? ""
+        let url = transcriptFilePath()
+        latest = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
     // MARK: - Session Management
@@ -121,12 +124,13 @@ final class TranscriptStore: ObservableObject {
         let session = Session.makeNew(title: title)
         
         do {
-            try latest.write(to: transcriptFileFor(id: session.id), atomically: true, encoding: .utf8)
+            let sessionFile = transcriptFileFor(id: session.id)
+            try latest.write(to: sessionFile, atomically: true, encoding: .utf8)
             
-            // Exclude from backups
+            // FIX: Store URL in a variable first
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = true
-            try transcriptFileFor(id: session.id).setResourceValues(resourceValues)
+            try sessionFile.setResourceValues(resourceValues)
             
             sessions.insert(session, at: 0)
             saveIndex()
@@ -181,9 +185,10 @@ final class TranscriptStore: ObservableObject {
     }
 
     func clear() {
+        let url = transcriptFilePath()
         do {
-            if fm.fileExists(atPath: transcriptFile.path) {
-                try fm.removeItem(at: transcriptFile)
+            if fm.fileExists(atPath: url.path) {
+                try fm.removeItem(at: url)
             }
             latest = ""
             lastSaved = "-"
