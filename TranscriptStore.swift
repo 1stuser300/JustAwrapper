@@ -8,6 +8,7 @@ final class TranscriptStore: ObservableObject {
     @Published var lastSaved: String = "-"
     @Published var lastError: String = ""
     @Published var saveCount: Int = 0
+    @Published var captureEnabled: Bool = true
 
     private let fm = FileManager.default
 
@@ -16,8 +17,7 @@ final class TranscriptStore: ObservableObject {
             .appendingPathComponent("LumoTranscripts", isDirectory: true)
     }
 
-    var latestFile: URL { dir.appendingPathComponent("latest.txt") }
-    var historyFile: URL { dir.appendingPathComponent("history.txt") }
+    var transcriptFile: URL { dir.appendingPathComponent("transcript.txt") }
     var storagePath: String { dir.path }
 
     init() {
@@ -37,6 +37,8 @@ final class TranscriptStore: ObservableObject {
     }
 
     func save(_ raw: String) {
+        guard captureEnabled else { return }
+
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard text != latest else { return }
@@ -45,24 +47,9 @@ final class TranscriptStore: ObservableObject {
         _ = ensureDir()
 
         do {
-            try text.write(to: latestFile, atomically: true, encoding: .utf8)
-
-            let stamp = ISO8601DateFormatter().string(from: Date())
-            let entry = "\n===== \(stamp) =====\n\(text)\n"
-
-            if fm.fileExists(atPath: historyFile.path),
-               let handle = try? FileHandle(forWritingTo: historyFile) {
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                if let data = entry.data(using: .utf8) {
-                    try handle.write(contentsOf: data)
-                }
-            } else {
-                try entry.write(to: historyFile, atomically: true, encoding: .utf8)
-            }
-
+            try text.write(to: transcriptFile, atomically: true, encoding: .utf8)
             saveCount += 1
-            lastSaved = stamp
+            lastSaved = ISO8601DateFormatter().string(from: Date())
             lastError = ""
         } catch {
             lastError = error.localizedDescription
@@ -70,19 +57,22 @@ final class TranscriptStore: ObservableObject {
     }
 
     func loadLatest() {
-        latest = (try? String(contentsOf: latestFile, encoding: .utf8)) ?? ""
+        latest = (try? String(contentsOf: transcriptFile, encoding: .utf8)) ?? ""
     }
 
-    func loadHistory() -> String {
-        (try? String(contentsOf: historyFile, encoding: .utf8)) ?? "(no history yet)"
-    }
-
-    func clearEverything() {
-        try? fm.removeItem(at: latestFile)
-        try? fm.removeItem(at: historyFile)
-        latest = ""
-        lastSaved = "-"
-        saveCount = 0
-        lastError = ""
+    /// Deletes the stored transcript and pauses capture so it doesn't reappear.
+    func clear() {
+        do {
+            if fm.fileExists(atPath: transcriptFile.path) {
+                try fm.removeItem(at: transcriptFile)
+            }
+            latest = ""
+            lastSaved = "-"
+            saveCount = 0
+            lastError = ""
+            captureEnabled = false
+        } catch {
+            lastError = "delete failed: \(error.localizedDescription)"
+        }
     }
 }
