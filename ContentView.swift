@@ -4,7 +4,6 @@ import UIKit
 
 struct ContentView: View {
     @ObservedObject private var store = TranscriptStore.shared
-    @Environment(\.scenePhase) private var scenePhase
 
     @State private var showTabs = false
     @State private var showSettings = false
@@ -12,11 +11,13 @@ struct ContentView: View {
     @State private var pickedElementProps: ElementProperties?
     @State private var composerSelector: String = ""
     @State private var lastInjectResult: String = ""
-    @State private var sessionToDelete: Session?
-    @State private var showAlert = false
     @State private var webView: WKWebView?
     @State private var coverVisible = false
     @State private var didResignActive = false
+
+    @State private var activeAlert: ActiveAlert?
+    @State private var renamingSession: Session?
+    @State private var renameText: String = ""
 
     struct ElementProperties {
         var tag: String
@@ -24,6 +25,20 @@ struct ContentView: View {
         var ariaLabel: String?
         var hasEditable: Bool
         var indexAmongSimilar: Int
+    }
+
+    enum ActiveAlert: Identifiable {
+        case delete(Session)
+        case confirmRename(Session, String)
+
+        var id: String {
+            switch self {
+            case .delete(let s):
+                return "delete-" + s.id
+            case .confirmRename(let s, _):
+                return "rename-" + s.id
+            }
+        }
     }
 
     var body: some View {
@@ -36,16 +51,18 @@ struct ContentView: View {
                                        pickedElementProps = props
                                        composerSelector = descriptorFor(props)
                                        isPicking = false
-                                       lastInjectResult = "Target: \(descriptorFor(props))"
+                                       lastInjectResult = "Target: " + descriptorFor(props)
                                    })
+                } else {
+                    Color.black
                 }
 
                 Divider()
                 controls
                 statusBar
             }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
 
-            // Privacy cover — only while app is leaving the foreground
             if store.privacyMode && coverVisible {
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -54,7 +71,6 @@ struct ContentView: View {
                 .transition(.opacity)
             }
 
-            // Fake lock screen
             if store.unlockRequired {
                 fakeLockOverlay
             }
@@ -65,6 +81,10 @@ struct ContentView: View {
 
             if showSettings {
                 settingsSheet
+            }
+
+            if renamingSession != nil {
+                renameOverlay
             }
         }
         .animation(.easeInOut(duration: 0.15), value: coverVisible)
@@ -95,6 +115,30 @@ struct ContentView: View {
                 }
             }
         }
+        .alert(item: $activeAlert) { item in
+            switch item {
+            case .delete(let session):
+                return Alert(
+                    title: Text("Delete Chat?"),
+                    message: Text("Permanently delete '" + session.title + "' and its transcript? This cannot be undone."),
+                    primaryButton: .destructive(Text("Delete")) {
+                        store.deleteSession(id: session.id)
+                    },
+                    secondaryButton: .cancel()
+                )
+
+            case .confirmRename(let session, let newTitle):
+                return Alert(
+                    title: Text("Rename Chat?"),
+                    message: Text("Rename '" + session.title + "' to '" + newTitle + "'?"),
+                    primaryButton: .default(Text("Rename")) {
+                        store.updateSessionTitle(id: session.id, newTitle: newTitle)
+                        renamingSession = nil
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
+        }
     }
 
     // MARK: - Controls
@@ -103,7 +147,7 @@ struct ContentView: View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Button(isPicking ? "Cancel Pick" : "Pick Target") {
-                    isPicking ? cancelPick() : armPicker()
+                    if isPicking { cancelPick() } else { armPicker() }
                 }
                 .buttonStyle(.bordered)
                 .font(.caption)
@@ -151,25 +195,15 @@ struct ContentView: View {
         .padding(.top, 8)
     }
 
-    // MARK: - Fake lock
+    // MARK: - Fake lock (silent)
 
     private var fakeLockOverlay: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 20) {
-                ProgressView()
-                    .scaleEffect(1.5)
-                    .tint(.white)
-
-                Text("Loading… tap to continue")
-                    .foregroundColor(.white)
-                    .font(.headline)
-
-                Text("\(store.fakeLockTapCount) tap\(store.fakeLockTapCount == 1 ? "" : "s") remaining")
-                    .foregroundColor(.gray)
-                    .font(.caption)
-            }
+            ProgressView()
+                .scaleEffect(1.6)
+                .tint(.white)
         }
         .contentShape(Rectangle())
         .onTapGesture {
@@ -193,69 +227,132 @@ struct ContentView: View {
                 }
                 .padding()
 
-                if store.sessions.isEmpty {
-                    Text("(no saved chats yet)\nTap 'Turn Into Tab' to save current chat")
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    ScrollView {
-                        VStack(spacing: 12) {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        mainChatRow
+
+                        if store.sessions.isEmpty {
+                            Text("(no saved chats yet)\nTap 'Turn Into Tab' to park the current chat")
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 20)
+                        } else {
                             ForEach(store.sessions) { session in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text(session.title).fontWeight(.semibold)
-                                        Spacer()
-                                        Text(formattedDate(session.lastActive))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    HStack(spacing: 8) {
-                                        Button("Load") {
-                                            store.loadSession(session)
-                                            store.selectedSessionId = session.id
-                                            showTabs = false
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .font(.caption)
-
-                                        Button("Delete") {
-                                            sessionToDelete = session
-                                            showAlert = true
-                                        }
-                                        .font(.caption)
-                                        .tint(.red)
-                                    }
-                                }
-                                .padding(.horizontal)
-                                .padding(.vertical, 12)
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(8)
+                                sessionRow(session)
                             }
                         }
-                        .padding()
                     }
+                    .padding()
                 }
             }
             .frame(width: min(UIScreen.main.bounds.width * 0.9, 420),
-                   height: UIScreen.main.bounds.height * 0.7)
+                   height: UIScreen.main.bounds.height * 0.72)
             .background(Color.black.opacity(0.95))
             .cornerRadius(12)
         }
         .onAppear { store.loadSessions() }
-        .alert("Delete Session?", isPresented: $showAlert) {
-            Button("Cancel", role: .cancel) { sessionToDelete = nil }
-            Button("Delete", role: .destructive) {
-                if let session = sessionToDelete {
-                    store.deleteSession(id: session.id)
-                    sessionToDelete = nil
+    }
+
+    private var mainChatRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Main Chat").fontWeight(.semibold)
+                Spacer()
+                if store.activeSessionId == nil {
+                    Text("ACTIVE").font(.caption2).foregroundColor(.green)
                 }
             }
-        } message: {
-            if let session = sessionToDelete {
-                Text("Permanently delete '\(session.title)'? This cannot be undone.")
+
+            Button("Switch") {
+                store.selectMainChat()
+                showTabs = false
             }
+            .buttonStyle(.borderedProminent)
+            .font(.caption)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 12)
+        .background(Color.gray.opacity(0.25))
+        .cornerRadius(8)
+    }
+
+    private func sessionRow(_ session: Session) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(session.title).fontWeight(.semibold)
+                Spacer()
+                if store.activeSessionId == session.id {
+                    Text("ACTIVE").font(.caption2).foregroundColor(.green)
+                }
+            }
+
+            Text(formattedDate(session.lastActive))
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Switch") {
+                    store.loadSession(session)
+                    showTabs = false
+                }
+                .buttonStyle(.borderedProminent)
+                .font(.caption)
+
+                Button("Rename") {
+                    renameText = session.title
+                    renamingSession = session
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+
+                Button("Delete") {
+                    activeAlert = .delete(session)
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+                .tint(.red)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 12)
+        .background(Color.gray.opacity(0.2))
+        .cornerRadius(8)
+    }
+
+    // MARK: - Rename overlay
+
+    private var renameOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { renamingSession = nil }
+
+            VStack(spacing: 16) {
+                Text("Rename Chat").font(.headline)
+
+                TextField("Title", text: $renameText)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal)
+
+                HStack(spacing: 12) {
+                    Button("Cancel") { renamingSession = nil }
+                        .buttonStyle(.bordered)
+
+                    Button("Rename") {
+                        if let session = renamingSession {
+                            let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                activeAlert = .confirmRename(session, trimmed)
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .frame(width: min(UIScreen.main.bounds.width * 0.85, 360))
+            .background(Color.black.opacity(0.95))
+            .cornerRadius(12)
         }
     }
 
@@ -281,18 +378,22 @@ struct ContentView: View {
                     .padding(.horizontal)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Features:").font(.caption).foregroundColor(.secondary)
-                    Text("• Captures conversation text").font(.caption)
-                    Text("• Excludes from iCloud backups").font(.caption)
-                    Text("• Privacy cover hides preview when leaving app").font(.caption)
-                    Text("• Fake lock deters snooping").font(.caption)
+                    Text("Notes:").font(.caption).foregroundColor(.secondary)
+                    Text("• Page keeps full height when the keyboard opens, so it stays visible. Tap Done to reach the buttons.")
+                        .font(.caption)
+                    Text("• Each tab keeps its own transcript file.")
+                        .font(.caption)
+                    Text("• Transcripts are excluded from iCloud backups.")
+                        .font(.caption)
+                    Text("• Fake lock shows a silent loading screen on launch and on return.")
+                        .font(.caption)
                 }
                 .padding(.horizontal)
 
                 Spacer()
             }
             .frame(width: min(UIScreen.main.bounds.width * 0.9, 420),
-                   height: UIScreen.main.bounds.height * 0.42)
+                   height: UIScreen.main.bounds.height * 0.5)
             .background(Color.black.opacity(0.95))
             .cornerRadius(12)
         }
@@ -302,10 +403,10 @@ struct ContentView: View {
 
     private var statusBar: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Capture: \(store.captureEnabled ? "ON" : "PAUSED")   Saves: \(store.saveCount)")
+            Text("Tab: " + store.activeTabLabel + "   Capture: " + (store.captureEnabled ? "ON" : "PAUSED") + "   Saves: " + String(store.saveCount))
 
             if !composerSelector.isEmpty {
-                Text("Target: \(composerSelector)")
+                Text("Target: " + composerSelector)
                     .lineLimit(2)
                     .truncationMode(.middle)
             }
@@ -315,7 +416,7 @@ struct ContentView: View {
             }
 
             if !store.lastError.isEmpty {
-                Text("ERROR: \(store.lastError)").foregroundColor(.red)
+                Text("ERROR: " + store.lastError).foregroundColor(.red)
             }
 
             Text(store.storagePath)
@@ -340,9 +441,8 @@ struct ContentView: View {
             let t;
             const send = () => {
                 const txt = document.body ? document.body.innerText : '';
-                const url = window.location.href;
                 if (txt && txt.length > 0) {
-                    window.webkit.messageHandlers.save.postMessage(JSON.stringify({ text: txt, url: url }));
+                    window.webkit.messageHandlers.save.postMessage(JSON.stringify({ text: txt }));
                 }
             };
             const schedule = () => { clearTimeout(t); t = setTimeout(send, 1200); };
@@ -437,9 +537,13 @@ struct ContentView: View {
 
     private func descriptorFor(_ props: ElementProperties) -> String {
         var parts: [String] = [props.tag]
-        if let pl = props.placeholder, !pl.isEmpty { parts.append("\"\(pl)\"") }
-        if let al = props.ariaLabel, !al.isEmpty { parts.append("[\(al)]") }
-        parts.append("#\(props.indexAmongSimilar)")
+        if let pl = props.placeholder, !pl.isEmpty {
+            parts.append("\"" + pl + "\"")
+        }
+        if let al = props.ariaLabel, !al.isEmpty {
+            parts.append("[" + al + "]")
+        }
+        parts.append("#" + String(props.indexAmongSimilar))
         return parts.joined(separator: " ")
     }
 
@@ -454,21 +558,20 @@ struct ContentView: View {
     }
 
     private func createSession() {
-        store.turnIntoTab {
-            showTabs = true
-        }
+        store.turnIntoTab()
+        showTabs = true
     }
 
     private func armPicker() {
         isPicking = true
         lastInjectResult = ""
         pickedElementProps = nil
-        webView?.evaluateJavaScript("window.__lumoArmPicker(true);") { _, error in
-            if let error = error {
-                lastInjectResult = "Arm failed: \(error.localizedDescription)"
-                isPicking = false
+             .evaluateJavaScript("window.__lumoArmPicker(true);") { _, error in
+                if let error = error {
+                    lastInjectResult = "Arm failed: " + error.localizedDescription
+                    isPicking = false
+                }
             }
-        }
     }
 
     private func cancelPick() {
@@ -550,7 +653,7 @@ struct ContentView: View {
 
         webView?.evaluateJavaScript(script) { result, error in
             if let error = error {
-                lastInjectResult = "Inject error: \(error.localizedDescription)"
+                lastInjectResult = "Inject error: " + error.localizedDescription
             } else if let s = result as? String {
                 lastInjectResult = s
             }
