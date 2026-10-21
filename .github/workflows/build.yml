@@ -1,0 +1,74 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile Swift
+        run: |
+          mkdir -p build/LumoMVP.app
+          xcrun --sdk iphoneos swiftc \
+            -target arm64-apple-ios16.5 \
+            -O -wmo \
+            -framework SwiftUI \
+            -framework UIKit \
+            -framework WebKit \
+            -framework Combine \
+            -framework Foundation \
+            -emit-executable \
+            -o build/LumoMVP.app/LumoMVP \
+            AppDelegate.swift \
+            ContentView.swift \
+            TranscriptStore.swift
+
+      - name: Create Info.plist
+        run: |
+          cat > build/LumoMVP.app/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key>
+              <string>com.lumo.mvp</string>
+              <key>CFBundleName</key>
+              <string>LumoMVP</string>
+              <key>CFBundleDisplayName</key>
+              <string>LumoMVP</string>
+              <key>CFBundleExecutable</key>
+              <string>LumoMVP</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>UIRequiresFullScreen</key>
+              <true/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Ad-hoc sign
+        run: codesign --force --sign - build/LumoMVP.app
+
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          cp -R build/LumoMVP.app Payload/
+          zip -r LumoMVP.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LumoMVP.ipa
+          path: LumoMVP.ipa
