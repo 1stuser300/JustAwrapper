@@ -96,13 +96,13 @@ final class TranscriptStore: ObservableObject {
         _ = ensureDir()
 
         do {
-            // Exclude from backups
-            var fileURL = transcriptFile
-            try fileURL.setResourceValues([
-                URLResourceKey.isExcludedFromBackupKey: true
-            ])
-            
             try text.write(to: transcriptFile, atomically: true, encoding: .utf8)
+            
+            // Exclude from backups
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try transcriptFile.setResourceValues(resourceValues)
+            
             saveCount += 1
             lastSaved = ISO8601DateFormatter().string(from: Date())
             lastError = ""
@@ -122,10 +122,11 @@ final class TranscriptStore: ObservableObject {
         
         do {
             try latest.write(to: transcriptFileFor(id: session.id), atomically: true, encoding: .utf8)
-            var sessionFileURL = transcriptFileFor(id: session.id)
-            try sessionFileURL.setResourceValues([
-                URLResourceKey.isExcludedFromBackupKey: true
-            ])
+            
+            // Exclude from backups
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try transcriptFileFor(id: session.id).setResourceValues(resourceValues)
             
             sessions.insert(session, at: 0)
             saveIndex()
