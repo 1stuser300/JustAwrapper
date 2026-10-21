@@ -12,7 +12,6 @@ struct ContentView: View {
     @State private var sessionToDelete: Session?
     @State private var renameSession: Session?
     @State private var showAlert = false
-    @State private var alertMessage = ""
 
     @State private var webView: WKWebView = {
         let config = WKWebViewConfiguration()
@@ -53,12 +52,12 @@ struct ContentView: View {
                 let cur = el;
                 while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
                     let part = cur.tagName.toLowerCase();
-                    if (el.id) {
+                    if (cur.id) {
                         parts.unshift('#' + CSS.escape(cur.id));
                         break;
                     }
                     const cls = (typeof cur.className === 'string' && cur.className.trim())
-                        ? cur.className.trim().split(/\s+/).filter(Boolean).slice(0, 2)
+                        ? cur.className.trim().split(/\\\\s+/).filter(Boolean).slice(0, 2)
                         : [];
                     if (cls.length) {
                         part += '.' + cls.map(function(c){ return CSS.escape(c); }).join('.');
@@ -134,14 +133,12 @@ struct ContentView: View {
                 statusBar
             }
 
-            // Privacy blur overlay
             if store.privacyMode {
                 Color.black
                     .ignoresSafeArea()
                     .transition(.opacity)
             }
 
-            // Sessions menu overlay
             if showSessions {
                 sessionsSheet
             }
@@ -179,8 +176,6 @@ struct ContentView: View {
             }
         }
     }
-
-    // MARK: - Controls (Main UI)
 
     private var controls: some View {
         VStack(spacing: 6) {
@@ -233,8 +228,6 @@ struct ContentView: View {
         .padding(.top, 8)
     }
 
-    // MARK: - Sessions Sheet
-
     private var sessionsSheet: some View {
         ZStack {
             Color.black.opacity(0.5)
@@ -273,7 +266,7 @@ struct ContentView: View {
 
                                     Button("Load") {
                                         store.loadSession(session)
-                                        selectedSessionId = session.id
+                                        store.selectedSessionId = session.id
                                         showSessions = false
                                     }
                                     .buttonStyle(.borderedProminent)
@@ -312,34 +305,7 @@ struct ContentView: View {
         .onAppear {
             store.loadSessions()
         }
-        .alert("Rename Chat", isPresented: Binding(
-            get: { renameSession != nil },
-            set: { if !$0 { renameSession = nil } }
-        )) {
-            if let session = renameSession {
-                TextField("Title", text: Binding(
-                    get: { session.title },
-                    set: { session.title = $0 }
-                ))
-                Button("Save") {
-                    if let session = renameSession {
-                        store.updateSessionTitle(id: session.id, newTitle: session.title)
-                        renameSession = nil
-                    }
-                }
-            }
-        } message: {
-            if let session = renameSession {
-                Text("Enter a custom title for this chat:")
-                TextField("Title", text: Binding(
-                    get: { session.title },
-                    set: { session.title = $0 }
-                ))
-            }
-        }
     }
-
-    // MARK: - Status Bar
 
     private var statusBar: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -370,8 +336,6 @@ struct ContentView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: - Helpers
-
     private func formattedDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
@@ -383,12 +347,9 @@ struct ContentView: View {
         store.turnIntoTab {
             showSessions = true
             store.captureEnabled = false
-            // Reload WebView for fresh chat session
             webView.reload()
         }
     }
-
-    // MARK: - Picker
 
     private func armPicker() {
         isPicking = true
@@ -405,8 +366,6 @@ struct ContentView: View {
         isPicking = false
         webView.evaluateJavaScript("window.__lumoArmPicker && window.__lumoArmPicker(false);") { _, _ in }
     }
-
-    // MARK: - Injection
 
     private func injectTranscript() {
         let text = store.latest
@@ -479,8 +438,6 @@ struct ContentView: View {
         return String(str.dropFirst().dropLast())
     }
 
-    // MARK: - Cookies
-
     private func clearCookies() {
         let ds = webView.configuration.websiteDataStore
         let types: Set<String> = [WKWebsiteDataTypeCookies]
@@ -489,8 +446,6 @@ struct ContentView: View {
         }
     }
 }
-
-// MARK: - WebView wrapper
 
 struct WebViewWrapper: UIViewRepresentable {
     let webView: WKWebView

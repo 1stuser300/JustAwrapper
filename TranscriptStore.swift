@@ -35,10 +35,19 @@ final class TranscriptStore: ObservableObject {
             .appendingPathComponent("LumoTranscripts", isDirectory: true)
     }
 
-    private var indexURL: URL { dir.appendingPathComponent(indexFile) }
-    private var transcriptFileFor(id: String) -> URL { dir.appendingPathComponent("\(id).txt") }
+    private var indexURL: URL {
+        dir.appendingPathComponent(indexFile)
+    }
+    
+    private func transcriptFileFor(id: String) -> URL {
+        dir.appendingPathComponent("\(id).txt")
+    }
 
     var storagePath: String { dir.path }
+    
+    private var transcriptFile: URL {
+        dir.appendingPathComponent("transcript.txt")
+    }
 
     init() {
         _ = ensureDir()
@@ -87,9 +96,12 @@ final class TranscriptStore: ObservableObject {
         _ = ensureDir()
 
         do {
-            try transcriptFile.setResourceValues([
+            // Exclude from backups
+            var fileURL = transcriptFile
+            try fileURL.setResourceValues([
                 URLResourceKey.isExcludedFromBackupKey: true
             ])
+            
             try text.write(to: transcriptFile, atomically: true, encoding: .utf8)
             saveCount += 1
             lastSaved = ISO8601DateFormatter().string(from: Date())
@@ -99,37 +111,27 @@ final class TranscriptStore: ObservableObject {
         }
     }
 
-    // Main chat uses latest.txt
-    private var transcriptFile: URL {
-        dir.appendingPathComponent("transcript.txt")
-    }
-
     func loadLatest() {
         latest = (try? String(contentsOf: transcriptFile, encoding: .utf8)) ?? ""
     }
 
     // MARK: - Session Management
 
-    /// Turns current chat into a saved tab AND reloads WebView for fresh chat
     func turnIntoTab(title: String = "", onComplete: @escaping () -> Void) {
         let session = Session.makeNew(title: title)
         
         do {
-            // Save current state to session file
             try latest.write(to: transcriptFileFor(id: session.id), atomically: true, encoding: .utf8)
-            
-            // Set exclusion flag
-            try transcriptFileFor(id: session.id).setResourceValues([
+            var sessionFileURL = transcriptFileFor(id: session.id)
+            try sessionFileURL.setResourceValues([
                 URLResourceKey.isExcludedFromBackupKey: true
             ])
             
             sessions.insert(session, at: 0)
             saveIndex()
             
-            // Don't clear latest - let WebView reload handle that naturally
             saveCount = 0
             lastSaved = ISO8601DateFormatter().string(from: Date())
-            
             captureEnabled = false
             onComplete()
         } catch {
@@ -176,9 +178,23 @@ final class TranscriptStore: ObservableObject {
     func resumeCapture() {
         captureEnabled = true
     }
+
+    func clear() {
+        do {
+            if fm.fileExists(atPath: transcriptFile.path) {
+                try fm.removeItem(at: transcriptFile)
+            }
+            latest = ""
+            lastSaved = "-"
+            saveCount = 0
+            lastError = ""
+            captureEnabled = false
+        } catch {
+            lastError = "delete failed: \(error.localizedDescription)"
+        }
+    }
 }
 
-// MARK: - Helpers
 extension Array {
     mutating func moveObject(at fromIndex: Int, to toIndex: Int) {
         guard fromIndex != toIndex,
