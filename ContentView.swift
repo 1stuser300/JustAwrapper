@@ -120,7 +120,7 @@ struct ContentView: View {
             case .delete(let session):
                 return Alert(
                     title: Text("Delete Chat?"),
-                    message: Text("Permanently delete '" + session.title + "' and its transcript? This cannot be undone."),
+                    message: Text("Permanently delete '\(session.title)' and its transcript? This cannot be undone."),
                     primaryButton: .destructive(Text("Delete")) {
                         store.deleteSession(id: session.id)
                     },
@@ -130,10 +130,9 @@ struct ContentView: View {
             case .confirmRename(let session, let newTitle):
                 return Alert(
                     title: Text("Rename Chat?"),
-                    message: Text("Rename '" + session.title + "' to '" + newTitle + "'?"),
+                    message: Text("Rename '\(session.title)' to '\(newTitle)'?"),
                     primaryButton: .default(Text("Rename")) {
                         store.updateSessionTitle(id: session.id, newTitle: newTitle)
-                        renamingSession = nil
                     },
                     secondaryButton: .cancel()
                 )
@@ -342,6 +341,7 @@ struct ContentView: View {
                         if let session = renamingSession {
                             let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                             if !trimmed.isEmpty {
+                                renamingSession = nil
                                 activeAlert = .confirmRename(session, trimmed)
                             }
                         }
@@ -401,9 +401,15 @@ struct ContentView: View {
 
     // MARK: - Status bar
 
+    private var statusLine: String {
+        let captureState = store.captureEnabled ? "ON" : "PAUSED"
+        let saves = String(store.saveCount)
+        return "Tab: " + store.activeTabLabel + "   Capture: " + captureState + "   Saves: " + saves
+    }
+
     private var statusBar: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Tab: " + store.activeTabLabel + "   Capture: " + (store.captureEnabled ? "ON" : "PAUSED") + "   Saves: " + String(store.saveCount))
+            Text(statusLine)
 
             if !composerSelector.isEmpty {
                 Text("Target: " + composerSelector)
@@ -566,12 +572,15 @@ struct ContentView: View {
         isPicking = true
         lastInjectResult = ""
         pickedElementProps = nil
-             .evaluateJavaScript("window.__lumoArmPicker(true);") { _, error in
-                if let error = error {
-                    lastInjectResult = "Arm failed: " + error.localizedDescription
-                    isPicking = false
-                }
+
+        guard let webView = webView else { return }
+
+        webView.evaluateJavaScript("window.__lumoArmPicker(true);") { _, error in
+            if let error = error {
+                lastInjectResult = "Arm failed: " + error.localizedDescription
+                isPicking = false
             }
+        }
     }
 
     private func cancelPick() {
