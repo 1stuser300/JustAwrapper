@@ -96,11 +96,9 @@ final class TranscriptStore: ObservableObject {
         _ = ensureDir()
 
         do {
-            // FIX: Store URL in a variable first
-            let fileURL = transcriptFilePath()
+            var fileURL = transcriptFilePath()
             try text.write(to: fileURL, atomically: true, encoding: .utf8)
             
-            // Now modify the variable, not the computed property
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = true
             try fileURL.setResourceValues(resourceValues)
@@ -124,10 +122,9 @@ final class TranscriptStore: ObservableObject {
         let session = Session.makeNew(title: title)
         
         do {
-            let sessionFile = transcriptFileFor(id: session.id)
+            var sessionFile = transcriptFileFor(id: session.id)
             try latest.write(to: sessionFile, atomically: true, encoding: .utf8)
             
-            // FIX: Store URL in a variable first
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = true
             try sessionFile.setResourceValues(resourceValues)
