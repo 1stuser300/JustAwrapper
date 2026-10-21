@@ -213,13 +213,16 @@ final class TranscriptStore: ObservableObject {
         return false
     }
 
-    // Background time extension
+    // Background time extension — FIXED
     func requestBackgroundTime() -> UIBackgroundTaskIdentifier {
-        let identifier = UIApplication.shared.beginBackgroundTask(withName: "LumoExtendedTime") {
+        var identifier: UIBackgroundTaskIdentifier = .invalid
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "LumoExtendedTime") {
             UIApplication.shared.endBackgroundTask(identifier)
+            identifier = .invalid
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(maxBackgroundTime)) {
             UIApplication.shared.endBackgroundTask(identifier)
+            identifier = .invalid
         }
         return identifier
     }
