@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 
 struct Session: Codable, Identifiable {
     let id: String
@@ -21,14 +22,18 @@ final class TranscriptStore: ObservableObject {
     @Published var saveCount: Int = 0
     @Published var captureEnabled: Bool = true
     @Published var privacyMode: Bool = false
+    @Published var fakeLockTapCount: Int = 0
+    @Published var unlockRequired: Bool = false
     
     @Published var sessions: [Session] = []
     @Published var selectedSessionId: String?
+    @Published var webViewURLs: [String: String] = [:] // Store Lumo URL per session
     
     private let fm = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let indexFile = "sessions.json"
+    private let maxBackgroundTime = 30 // seconds
 
     private var dir: URL {
         fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -116,6 +121,10 @@ final class TranscriptStore: ObservableObject {
         latest = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
+    func recordWebViewURL(sessionId: String, url: String) {
+        webViewURLs[sessionId] = url
+    }
+
     // MARK: - Session Management
 
     func turnIntoTab(title: String = "", onComplete: @escaping () -> Void) {
@@ -195,6 +204,32 @@ final class TranscriptStore: ObservableObject {
         } catch {
             lastError = "delete failed: \(error.localizedDescription)"
         }
+    }
+
+    // Fake lock screen helpers
+    func startUnlock() {
+        unlockRequired = true
+        fakeLockTapCount = Int.random(in: 2...3)
+    }
+
+    func tapOnLock() -> Bool {
+        fakeLockTapCount -= 1
+        if fakeLockTapCount <= 0 {
+            unlockRequired = false
+            return true
+        }
+        return false
+    }
+
+    // Background time extension helper
+    func requestBackgroundTime() -> UIBackgroundTaskIdentifier {
+        let identifier = UIApplication.shared.beginBackgroundTask(withName: "LumoExtendedTime") {
+            UIApplication.shared.endBackgroundTask(identifier)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(maxBackgroundTime)) {
+            UIApplication.shared.endBackgroundTask(identifier)
+        }
+        return identifier
     }
 }
 
