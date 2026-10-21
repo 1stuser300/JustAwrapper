@@ -27,22 +27,19 @@ final class TranscriptStore: ObservableObject {
     
     @Published var sessions: [Session] = []
     @Published var selectedSessionId: String?
-    @Published var webViewURLs: [String: String] = [:] // Store Lumo URL per session
     
     private let fm = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let indexFile = "sessions.json"
-    private let maxBackgroundTime = 30 // seconds
+    private let maxBackgroundTime = 30
 
     private var dir: URL {
         fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("LumoTranscripts", isDirectory: true)
     }
 
-    private var indexURL: URL {
-        dir.appendingPathComponent(indexFile)
-    }
+    private var indexURL: URL { dir.appendingPathComponent(indexFile) }
     
     private func transcriptFileFor(id: String) -> URL {
         dir.appendingPathComponent("\(id).txt")
@@ -92,7 +89,6 @@ final class TranscriptStore: ObservableObject {
 
     func save(_ raw: String) {
         guard captureEnabled else { return }
-
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard text != latest else { return }
@@ -119,10 +115,6 @@ final class TranscriptStore: ObservableObject {
     func loadLatest() {
         let url = transcriptFilePath()
         latest = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-    }
-
-    func recordWebViewURL(sessionId: String, url: String) {
-        webViewURLs[sessionId] = url
     }
 
     // MARK: - Session Management
@@ -206,7 +198,7 @@ final class TranscriptStore: ObservableObject {
         }
     }
 
-    // Fake lock screen helpers
+    // Fake lock screen
     func startUnlock() {
         unlockRequired = true
         fakeLockTapCount = Int.random(in: 2...3)
@@ -221,7 +213,7 @@ final class TranscriptStore: ObservableObject {
         return false
     }
 
-    // Background time extension helper
+    // Background time extension
     func requestBackgroundTime() -> UIBackgroundTaskIdentifier {
         let identifier = UIApplication.shared.beginBackgroundTask(withName: "LumoExtendedTime") {
             UIApplication.shared.endBackgroundTask(identifier)
